@@ -85,14 +85,10 @@ async fn irc_msg(
 
             if let AUTHENTICATE(d) = &m.command {
                 if d.as_str() == "+" {
-                    let sasl_plain = base64::encode(
-                        format!(
-                            "{}\0{}\0{}",
-                            toml.user,
-                            toml.user,
-                            toml.password,
-                        ),
-                    );
+                    let sasl_plain = base64::encode(format!(
+                        "{}\0{}\0{}",
+                        toml.user, toml.user, toml.password,
+                    ));
 
                     println!("--- SASL PLAIN AUTH...");
                     client.send_sasl(&sasl_plain)?;
@@ -104,10 +100,7 @@ async fn irc_msg(
         }
         State::WaitSaslResult => {
             use irc::proto::Command::Response;
-            use irc::proto::Response::{
-                RPL_SASLSUCCESS,
-                ERR_SASLFAIL,
-            };
+            use irc::proto::Response::{RPL_SASLSUCCESS, ERR_SASLFAIL};
 
             match &m.command {
                 Response(RPL_SASLSUCCESS, _) => {
@@ -133,10 +126,11 @@ async fn irc_msg(
                         client.send_join(&toml.channel)?;
                         return Ok(State::WaitJoin);
                     } else {
-                        println!("---- WRONG NICK ({})! GHOST...",
-                            nick);
-                        client.send_privmsg("NickServ",
-                            format!("GHOST {}", toml.user))?;
+                        println!("---- WRONG NICK ({})! GHOST...", nick);
+                        client.send_privmsg(
+                            "NickServ",
+                            format!("GHOST {}", toml.user),
+                        )?;
                         return Ok(State::WaitGhost);
                     }
                 } else {
