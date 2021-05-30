@@ -419,10 +419,12 @@ dependencies = [
  "dropshot",
  "futures",
  "getopts",
+ "hmac-sha256",
  "irc",
  "openssl",
  "schemars",
  "serde",
+ "serde_json",
  "slog",
  "tokio",
  "toml",
@@ -461,6 +463,12 @@ checksum = "322f4de77956e22ed0e5032c359a0f1273f1f7f0d79bfa3b8ffbc730d7fbcc5c"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "hmac-sha256"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcdc571e566521512579aab40bf807c5066e1765fb36857f16ed7595c13567c6"
 
 [[package]]
 name = "hostname"

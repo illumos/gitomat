@@ -1,8 +1,7 @@
-use anyhow::{bail, Result};
 use futures::prelude::*;
 use std::time::Duration;
 
-use super::ConfigIrc;
+use super::{prelude::*, ConfigIrc, Action};
 
 fn s(s: &str) -> Option<String> {
     Some(s.to_string())
@@ -33,12 +32,13 @@ enum State {
 }
 
 async fn irc_msg(
+    log: &slog::Logger,
     toml: &ConfigIrc,
     client: &irc::client::Client,
     s: State,
     m: &irc::proto::Message,
 ) -> Result<State> {
-    println!("{:?}", m);
+    debug!(log, "IRC Message: {:?}", m);
 
     match s {
         State::Start => {
@@ -50,6 +50,7 @@ async fn irc_msg(
              * enforced by the network for connections that come from cloud
              * providers for spam reduction purposes.
              */
+            debug!(log, "negotiating SASL capability");
             client.send_cap_req(&[Capability::Sasl])?;
             return Ok(State::WaitSaslCap);
         }
@@ -65,7 +66,7 @@ async fn irc_msg(
 
                     match cmd {
                         ACK => {
-                            println!("--- OK, SASL!");
+                            debug!(log, "SASL capability OK");
                             /*
                              * Negotiate the use of the SASL PLAIN
                              * mechanism.
@@ -74,7 +75,7 @@ async fn irc_msg(
                             return Ok(State::WaitSaslPlus);
                         }
                         _ => {
-                            bail!("OH DEAR, NO SASL? {:?}", m);
+                            bail!("IRC server does not support SASL? {:?}", m);
                         }
                     }
                 }
@@ -90,7 +91,7 @@ async fn irc_msg(
                         toml.user, toml.user, toml.password,
                     ));
 
-                    println!("--- SASL PLAIN AUTH...");
+                    debug!(log, "--- SASL PLAIN AUTH...");
                     client.send_sasl(&sasl_plain)?;
                     return Ok(State::WaitSaslResult);
                 } else {
@@ -104,7 +105,7 @@ async fn irc_msg(
 
             match &m.command {
                 Response(RPL_SASLSUCCESS, _) => {
-                    println!("--- SASL OK!");
+                    info!(log, "SASL authentication OK");
                     client.identify()?;
                     return Ok(State::WaitRegister);
                 }
@@ -119,14 +120,14 @@ async fn irc_msg(
             use irc::proto::Response::RPL_ENDOFMOTD;
 
             if let Response(RPL_ENDOFMOTD, args) = &m.command {
-                println!("---- END OF MOTD DETECTED!");
+                debug!(log, "end of MOTD detected");
                 if let Some(nick) = args.iter().next() {
-                    if nick.as_str() == &toml.user {
-                        println!("--- JOINING");
+                    if nick.as_str() == toml.user {
+                        info!(log, "joining channel {}", toml.channel);
                         client.send_join(&toml.channel)?;
                         return Ok(State::WaitJoin);
                     } else {
-                        println!("---- WRONG NICK ({})! GHOST...", nick);
+                        info!(log, "wrong nick ({}); ghosting...", nick);
                         client.send_privmsg(
                             "NickServ",
                             format!("GHOST {}", toml.user),
@@ -148,7 +149,7 @@ async fn irc_msg(
                         NOTICE(_, msg) => {
                             if msg.contains("has been ghosted") {
                                 use irc::proto::Command::NICK;
-                                println!("---- CHANGING NICK");
+                                info!(log, "changing nick to {}", toml.user);
                                 client.send(NICK(toml.user.to_string()))?;
                                 return Ok(State::WaitNick);
                             }
@@ -163,13 +164,12 @@ async fn irc_msg(
 
             match &m.command {
                 NICK(newnick) => {
-                    if newnick.as_str() == &toml.user {
+                    if newnick.as_str() == toml.user {
                         /*
                          * XXX we should check the old nick I guess?
                          */
-                        println!("---- NICK OK NOW");
-
-                        println!("--- JOINING");
+                        info!(log, "nick now OK");
+                        info!(log, "joining channel {}", toml.channel);
                         client.send_join(&toml.channel)?;
                         return Ok(State::WaitJoin);
                     } else {
@@ -190,10 +190,18 @@ async fn irc_msg(
                     bail!("unexpected channel? {:?}", m);
                 }
 
-                println!("----- JOIN detected!");
-                client.send_privmsg(&toml.channel, "test")?;
+                info!(log, "joined to channel {}", chan);
 
-                println!("----- ONLINE");
+                if let Some(notify) = toml.notify.as_deref() {
+                    /*
+                     * If configured to do so, notify the owner of a new
+                     * connection.
+                     */
+                    debug!(log, "notifying {} of connection", notify);
+                    client.send_privmsg(notify, "online")?;
+                }
+
+                info!(log, "IRC client now online");
                 return Ok(State::Online);
             }
         }
@@ -203,7 +211,15 @@ async fn irc_msg(
     Ok(s)
 }
 
-pub(crate) async fn irc(toml: &ConfigIrc) -> Result<()> {
+/**
+ * Handle the life-cycle of an IRC connection.  When this function returns, the
+ * connection has been closed down.
+ */
+pub(crate) async fn irc(
+    log: &slog::Logger,
+    rx: &mut mpsc::Receiver<Action>,
+    toml: &ConfigIrc,
+) -> Result<()> {
     let cfg = irc::client::data::Config {
         nickname: s(&toml.user),
         alt_nicks: vec![us(&toml.user, 1), us(&toml.user, 2)],
@@ -217,6 +233,7 @@ pub(crate) async fn irc(toml: &ConfigIrc) -> Result<()> {
         ..Default::default()
     };
 
+    info!(log, "connecting to IRC server: {}", toml.server);
     let mut client = irc::client::Client::from_config(cfg).await?;
 
     let mut stream = client.stream()?;
@@ -235,10 +252,23 @@ pub(crate) async fn irc(toml: &ConfigIrc) -> Result<()> {
             _ = &mut online_timer, if !matches!(s, State::Online) => {
                 bail!("Did not reach Online state in time.");
             }
+            Some(a) = rx.recv(), if matches!(s, State::Online) => {
+                match a {
+                    Action::Message(text) => {
+                        info!(
+                            log,
+                            "sending message to {}: {}",
+                            &toml.channel,
+                            text
+                        );
+                        client.send_privmsg(&toml.channel, text)?;
+                    }
+                }
+            }
             m = stream.next() => {
                 match m {
                     Some(Ok(m)) => {
-                        s = irc_msg(&toml, &client, s, &m).await?;
+                        s = irc_msg(log, &toml, &client, s, &m).await?;
                     }
                     Some(Err(e)) => {
                         bail!("IRC error: {:?}", e);

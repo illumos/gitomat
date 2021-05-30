@@ -5,6 +5,7 @@ edition = "2018"
 
 [dependencies]
 serde = { version = "1.0", features = [ "derive" ] }
+serde_json = "1"
 getopts = "0.2"
 slog = "2.5"
 irc = "0.15"
@@ -15,6 +16,7 @@ dropshot = "0.5"
 schemars = "0.8"
 toml = "0.5"
 base64 = "0.13"
+hmac-sha256 = "0.1"
 
 #
 # I believe it is necessary to pull this in here, so that we can demand the
