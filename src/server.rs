@@ -158,8 +158,10 @@ pub(crate) async fn start_server(
     };
 
     let mut api = dropshot::ApiDescription::new();
-    api.register(say)
-        .map_err(|e| anyhow!("API registration: {}", e))?;
+    if toml.allow_say {
+        api.register(say)
+            .map_err(|e| anyhow!("API registration: {}", e))?;
+    }
     api.register(github)
         .map_err(|e| anyhow!("API registration: {}", e))?;
 

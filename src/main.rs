@@ -15,6 +15,7 @@ mod server;
 #[derive(Deserialize, Clone)]
 pub(crate) struct ConfigGithub {
     secret: String,
+    allow_say: bool,
 }
 
 #[derive(Deserialize, Clone)]
